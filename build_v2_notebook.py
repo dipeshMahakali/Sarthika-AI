@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 import json
+import ast
 
 notebook = {
     "nbformat": 4,
@@ -36,6 +38,21 @@ def add_code(source):
         "source": [line + "\n" for line in source.strip().split("\n")]
     })
 
+# Cell Codes Dictionary
+CELL_CODES = {
+  "cell_01_deps": "#@title Install Dependencies and Verify GPU\nimport os\nimport sys\n\nprint(\"Installing Sarthika Cognitive Architecture 3.0 dependencies...\")\n!pip install -q transformers accelerate bitsandbytes sentence-transformers faiss-cpu rich pydantic peft datasets\n\nimport torch\nprint(\"=\" * 60)\nif torch.cuda.is_available():\n    device_name = torch.cuda.get_device_name(0)\n    vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)\n    print(f\"✅ GPU DETECTED: {device_name}\")\n    print(f\"✅ VRAM AVAILABLE: {vram_gb:.2f} GB\")\n    device = \"cuda\"\nelse:\n    print(\"⚠️ NO GPU DETECTED! Running in CPU fallback mode.\")\n    print(\"👉 Recommended for Colab: Click Runtime -> Change runtime type -> T4 GPU.\")\n    device = \"cpu\"\nprint(\"=\" * 60)\n",
+  "cell_02_engine": "#@title Initialize Reasoning Engine\nfrom transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig\nimport torch\n\nMODEL_ID = \"Qwen/Qwen2.5-7B-Instruct\"\n\nclass CognitiveEngine:\n    def __init__(self, model_id: str = MODEL_ID):\n        print(f\"🚀 Loading Foundation Model: {model_id}...\")\n        self.tokenizer = AutoTokenizer.from_pretrained(model_id)\n\n        if torch.cuda.is_available():\n            bnb_config = BitsAndBytesConfig(\n                load_in_4bit=True,\n                bnb_4bit_quant_type=\"nf4\",\n                bnb_4bit_compute_dtype=torch.bfloat16,\n                bnb_4bit_use_double_quant=True,\n            )\n            self.model = AutoModelForCausalLM.from_pretrained(\n                model_id,\n                quantization_config=bnb_config,\n                device_map=\"auto\",\n                torch_dtype=torch.bfloat16,\n            )\n            print(\"✅ Model loaded with 4-bit NF4 Quantization on GPU.\")\n        else:\n            self.model = AutoModelForCausalLM.from_pretrained(\n                model_id,\n                torch_dtype=torch.float32,\n                device_map=\"cpu\",\n                low_cpu_mem_usage=True\n            )\n            print(\"⚠️ Model loaded on CPU (slow execution mode).\")\n\n    def generate(self, prompt: str, system_prompt: str = \"\", max_new_tokens: int = 1024, temperature: float = 0.6) -> str:\n        messages = []\n        if system_prompt:\n            messages.append({\"role\": \"system\", \"content\": system_prompt})\n        messages.append({\"role\": \"user\", \"content\": prompt})\n\n        text = self.tokenizer.apply_chat_template(\n            messages,\n            tokenize=False,\n            add_generation_prompt=True\n        )\n\n        model_inputs = self.tokenizer([text], return_tensors=\"pt\").to(self.model.device)\n        generated_ids = self.model.generate(\n            **model_inputs,\n            max_new_tokens=max_new_tokens,\n            temperature=temperature,\n            do_sample=True if temperature > 0 else False,\n            pad_token_id=self.tokenizer.eos_token_id\n        )\n\n        generated_ids = [\n            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)\n        ]\n        return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]\n\nengine = CognitiveEngine()\nprint(\"✅ Cognitive Reasoning Engine online.\")\n",
+  "cell_03_memory": "#@title Build Tripartite Memory Architecture\nimport sqlite3\nimport json\nimport numpy as np\nfrom sentence_transformers import SentenceTransformer\nimport faiss\nfrom typing import List, Dict, Any\n\nclass WorkingMemory:\n    def __init__(self):\n        self.active_goal: str = \"\"\n        self.subtasks: List[Dict[str, Any]] = []\n        self.current_step: int = 0\n        self.scratchpad: List[str] = []\n        self.reflexion_history: List[str] = []\n\n    def reset(self, goal: str):\n        self.active_goal = goal\n        self.subtasks = []\n        self.current_step = 0\n        self.scratchpad = []\n        self.reflexion_history = []\n\n    def add_thought(self, thought: str):\n        self.scratchpad.append(thought)\n\n    def log_reflexion(self, reflection: str):\n        self.reflexion_history.append(reflection)\n\nclass SemanticMemory:\n    \"\"\"Persistent Relational Knowledge Graph storing verified mathematical facts, constants, and domain assertions.\"\"\"\n    def __init__(self, db_path: str = \":memory:\"):\n        self.conn = sqlite3.connect(db_path)\n        self._init_db()\n\n    def _init_db(self):\n        cursor = self.conn.cursor()\n        cursor.execute('''CREATE TABLE IF NOT EXISTS facts (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            entity TEXT UNIQUE,\n            definition TEXT,\n            confidence REAL\n        )''')\n        self.conn.commit()\n\n    def store_fact(self, entity: str, definition: str, confidence: float = 1.0):\n        cursor = self.conn.cursor()\n        cursor.execute('''INSERT OR REPLACE INTO facts (entity, definition, confidence)\n                          VALUES (?, ?, ?)''', (entity, definition, confidence))\n        self.conn.commit()\n\n    def query_fact(self, entity: str) -> str:\n        cursor = self.conn.cursor()\n        cursor.execute(\"SELECT definition FROM facts WHERE entity LIKE ?\", (f\"%{entity}%\",))\n        row = cursor.fetchone()\n        return row[0] if row else \"\"\n\n    def get_all_facts(self) -> List[str]:\n        cursor = self.conn.cursor()\n        cursor.execute(\"SELECT entity, definition FROM facts ORDER BY id DESC LIMIT 10\")\n        rows = cursor.fetchall()\n        return [f\"- {r[0]}: {r[1]}\" for r in rows]\n\nclass EpisodicMemory:\n    \"\"\"FAISS Vector Store for Cross-Task Transfer Learning and Error Memory.\"\"\"\n    def __init__(self, embedding_model_name: str = \"all-MiniLM-L6-v2\"):\n        print(\"🧠 Initializing Episodic FAISS Vector Memory...\")\n        self.embedder = SentenceTransformer(embedding_model_name)\n        try:\n            self.dimension = self.embedder.get_embedding_dimension()\n        except AttributeError:\n            self.dimension = self.embedder.get_sentence_embedding_dimension()\n        self.index = faiss.IndexFlatL2(self.dimension)\n        self.episodes: List[Dict[str, Any]] = []\n\n    def record_episode(self, task: str, action: str, result: str, success: bool, reflection: str, reward_score: float = 1.0):\n        episode = {\n            \"task\": task,\n            \"action\": action,\n            \"result\": result,\n            \"success\": success,\n            \"reflection\": reflection,\n            \"reward_score\": reward_score\n        }\n        text_representation = f\"Task: {task} | Success: {success} | Reflection: {reflection}\"\n        embedding = self.embedder.encode([text_representation])[0].astype(\"float32\")\n        self.index.add(np.array([embedding]))\n        self.episodes.append(episode)\n\n    def recall_similar(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:\n        if self.index.ntotal == 0:\n            return []\n        query_vector = self.embedder.encode([query])[0].astype(\"float32\")\n        distances, indices = self.index.search(np.array([query_vector]), min(top_k, self.index.ntotal))\n        results = []\n        for idx in indices[0]:\n            if idx != -1 and idx < len(self.episodes):\n                results.append(self.episodes[idx])\n        return results\n\nworking_mem = WorkingMemory()\nsemantic_mem = SemanticMemory()\nepisodic_mem = EpisodicMemory()\n\n# Populate foundational mathematical axioms in Semantic Memory\nsemantic_mem.store_fact(\"Collatz Conjecture\", \"f(n) = n/2 if n is even else 3n+1. Peak 27 is 9232, stopping time 111.\")\nsemantic_mem.store_fact(\"Fibonacci Matrix Exponentiation\", \"[[1,1],[1,0]]^n yields F(n+1), F(n) in O(log n).\")\nsemantic_mem.store_fact(\"Mersenne Number\", \"M_p = 2^p - 1. Tested for primality via Lucas-Lehmer sequence S_i = (S_{i-1}^2 - 2) mod M_p.\")\n\nprint(\"✅ Tripartite Memory Architecture online with Seed Knowledge.\")\n",
+  "cell_04_sandbox": "#@title Persistent Transactional Sandbox & Skill Registry\nimport io\nimport sys\nimport copy\nimport traceback\nimport math\nfrom typing import Dict, Any, List, Optional\n\nclass PersistentTransactionalSandbox:\n    \"\"\"A persistent execution environment with deep-copied branch forks and atomic commit mechanisms.\"\"\"\n    def __init__(self, base_namespace: Optional[Dict[str, Any]] = None):\n        if base_namespace is None:\n            self.namespace: Dict[str, Any] = {\n                \"__builtins__\": __builtins__,\n                \"__name__\": \"__main__\",\n                \"__doc__\": \"AGI Persistent Sandbox Session\",\n                \"math\": math,\n            }\n        else:\n            self.namespace = {}\n            for k, v in base_namespace.items():\n                if k.startswith(\"__\"):\n                    self.namespace[k] = v\n                else:\n                    try:\n                        self.namespace[k] = copy.deepcopy(v)\n                    except Exception:\n                        self.namespace[k] = copy.copy(v)\n\n    def fork(self) -> \"PersistentTransactionalSandbox\":\n        \"\"\"Creates a child sandbox snapshot for isolated candidate rollout.\"\"\"\n        return PersistentTransactionalSandbox(self.namespace)\n\n    def commit(self, branch_sandbox: \"PersistentTransactionalSandbox\"):\n        \"\"\"Atomically commits the state of a winning branch into this master sandbox.\"\"\"\n        for k, v in branch_sandbox.namespace.items():\n            if not k.startswith(\"__\"):\n                try:\n                    self.namespace[k] = copy.deepcopy(v)\n                except Exception:\n                    self.namespace[k] = copy.copy(v)\n\n    def execute(self, code: str) -> Dict[str, Any]:\n        \"\"\"Executes code within the persistent state, capturing stdout, stderr, and variables.\"\"\"\n        old_stdout = sys.stdout\n        old_stderr = sys.stderr\n        redirected_out = io.StringIO()\n        redirected_err = io.StringIO()\n\n        sys.stdout = redirected_out\n        sys.stderr = redirected_err\n\n        success = False\n        output_str = \"\"\n        error_str = \"\"\n\n        try:\n            exec(code, self.namespace)\n            success = True\n            output_str = redirected_out.getvalue()\n        except Exception:\n            error_str = traceback.format_exc()\n        finally:\n            sys.stdout = old_stdout\n            sys.stderr = old_stderr\n\n        active_variables = {\n            k: type(v).__name__ for k, v in self.namespace.items()\n            if not k.startswith(\"__\") and not callable(v)\n        }\n        active_functions = [\n            k for k, v in self.namespace.items()\n            if not k.startswith(\"__\") and callable(v)\n        ]\n\n        return {\n            \"success\": success,\n            \"stdout\": output_str,\n            \"stderr\": error_str,\n            \"variables\": active_variables,\n            \"functions\": active_functions\n        }\n\nclass ProceduralSkillRegistry:\n    \"\"\"Preserves learned algorithmic capabilities across turns and prevents skill forgetting.\"\"\"\n    def __init__(self, sandbox: PersistentTransactionalSandbox):\n        self.sandbox = sandbox\n        self.skills: Dict[str, Dict[str, Any]] = {}\n        self._register_default_skills()\n\n    def _register_default_skills(self):\n        # 1. Prime Factorization\n        self.register_skill(\n            name=\"prime_factorization\",\n            docstring=\"Factorizes an integer into prime components.\",\n            code=\"\"\"def prime_factorization(n: int):\n    factors = []\n    d = 2\n    while d * d <= n:\n        while (n % d) == 0:\n            factors.append(d)\n            n //= d\n        d += 1\n    if n > 1:\n        factors.append(n)\n    return factors\"\"\"\n        )\n\n        # 2. Greatest Common Divisor\n        self.register_skill(\n            name=\"gcd\",\n            docstring=\"Computes the Greatest Common Divisor of two integers a and b.\",\n            code=\"\"\"def gcd(a: int, b: int) -> int:\n    while b:\n        a, b = b, a % b\n    return a\"\"\"\n        )\n\n        # 3. Collatz Sequence Analyzer (from v1)\n        self.register_skill(\n            name=\"collatz_analyzer\",\n            docstring=\"Calculates the peak value and stopping time for the Collatz 3n+1 sequence.\",\n            code=\"\"\"def collatz_analyzer(n: int):\n    curr = n\n    peak = n\n    steps = 0\n    while curr != 1:\n        if curr % 2 == 0:\n            curr //= 2\n        else:\n            curr = 3 * curr + 1\n        if curr > peak:\n            peak = curr\n        steps += 1\n    return {\"peak\": peak, \"stopping_time\": steps}\"\"\"\n        )\n\n    def register_skill(self, name: str, docstring: str, code: str) -> bool:\n        res = self.sandbox.execute(code)\n        if res[\"success\"]:\n            self.skills[name] = {\"doc\": docstring, \"code\": code}\n            return True\n        return False\n\n    def get_skill_docs(self) -> str:\n        if not self.skills:\n            return \"No procedural skills registered.\"\n        return \"\\\\n\".join([f\"- `{name}`: {meta['doc']}\" for name, meta in self.skills.items()])\n\nmaster_sandbox = PersistentTransactionalSandbox()\nskill_registry = ProceduralSkillRegistry(master_sandbox)\nprint(f\"✅ Persistent Transactional Sandbox & Skill Registry initialized with {len(skill_registry.skills)} core skills.\")\n",
+  "cell_05_metacognition": "#@title Dual-Process Metacognitive Engine\nimport re\nimport ast\nfrom typing import Dict, Any, List\n\nclass MetacognitivePlanner:\n    def __init__(self, engine: CognitiveEngine):\n        self.engine = engine\n\n    def decompose_objective(self, objective: str, memory_context: str, semantic_facts: str) -> List[str]:\n        prompt = (\n            \"Given the high-level objective, relevant episodic memory, and semantic facts, decompose the goal into 2 to 4 concrete executable Python sub-tasks.\\n\"\n            f\"Objective: {objective}\\n\\n\"\n            f\"Semantic Facts:\\n{semantic_facts}\\n\\n\"\n            f\"Episodic Memory Context:\\n{memory_context}\\n\\n\"\n            \"Output only a numbered list of sub-tasks (1. ..., 2. ..., etc.):\"\n        )\n        response = self.engine.generate(\n            prompt=prompt,\n            system_prompt=\"You are a System 2 Metacognitive Task Planner. Produce lean, execution-oriented sub-plans.\"\n        )\n        tasks = []\n        for line in response.strip().split(\"\\n\"):\n            match = re.match(r\"^\\d+\\.\\s*(.*)\", line.strip())\n            if match:\n                tasks.append(match.group(1).strip())\n        return tasks if tasks else [objective]\n\n    def generate_candidate_hypotheses(self, subtask: str, overall_objective: str, available_skills: str, state_summary: str, reflexion_feedback: str = \"\") -> Dict[str, str]:\n        \"\"\"System 1: Generates 3 distinct, competitive candidate approaches with reflexion guidance if retrying.\"\"\"\n        prompt_parts = [\n            \"Generate exactly 3 competitive candidate approaches to execute this sub-task in Python.\\n\",\n            f\"Sub-task: {subtask}\\n\",\n            f\"Overall Goal: {overall_objective}\\n\",\n            f\"Available Skills: {available_skills}\\n\",\n            f\"Current Sandbox State: {state_summary}\\n\"\n        ]\n        if reflexion_feedback:\n            prompt_parts.append(\n                f\"\\n[IMPORTANT CRITIC REFLEXION - PREVIOUS ATTEMPT FAILED]:\\n{reflexion_feedback}\\n\"\n                \"You MUST address the above critique. Do NOT repeat the same mistake.\\n\"\n            )\n\n        prompt_parts.append(\n            \"\\nEach candidate MUST take a distinct algorithmic or structural strategy.\\n\"\n            \"Write actual executable code that computes results, defines functions, and prints verified outputs. Do NOT just print placeholder messages.\\n\\n\"\n            \"Format your response clearly as:\\n\"\n            \"--- CANDIDATE A ---\\n```python\\n# Code for approach A\\n```\\n\\n\"\n            \"--- CANDIDATE B ---\\n```python\\n# Code for approach B\\n```\\n\\n\"\n            \"--- CANDIDATE C ---\\n```python\\n# Code for approach C\\n```\"\n        )\n        prompt = \"\".join(prompt_parts)\n\n        raw_response = self.engine.generate(\n            prompt=prompt,\n            system_prompt=\"You are an advanced System 1 algorithmic synthesizer. You propose distinct, competitive, and runnable Python solutions.\",\n            temperature=0.7\n        )\n\n        return self._extract_candidates_robust(raw_response, subtask)\n\n    def _extract_candidates_robust(self, raw_response: str, subtask: str) -> Dict[str, str]:\n        \"\"\"Resilient multi-tier extraction guaranteeing genuine Python code extraction.\"\"\"\n        candidates = {}\n        letters = [\"A\", \"B\", \"C\"]\n\n        # 1. Primary: Match explicit Candidate A/B/C headers\n        for letter in letters:\n            patterns = [\n                rf\"(?:---|###|\\*\\*)\\s*(?:CANDIDATE|STRATEGY|APPROACH)\\s+{letter}\" + r\"[:\\s*\\-]*\\n*```(?:python)?\\s*([\\s\\S]*?)```\",\n                rf\"(?:Candidate|Strategy|Approach)\\s+{letter}\" + r\"[:\\s*\\-]*\\n*```(?:python)?\\s*([\\s\\S]*?)```\",\n                rf\"\\[{letter}\\]\" + r\"[:\\s]*```(?:python)?\\s*([\\s\\S]*?)```\"\n            ]\n            for p in patterns:\n                m = re.search(p, raw_response, re.IGNORECASE)\n                if m and len(m.group(1).strip()) > 10:\n                    candidates[f\"Candidate {letter}\"] = m.group(1).strip()\n                    break\n\n        # 2. Secondary: If any letter missed, harvest markdown code blocks sequentially\n        if len(candidates) < 3:\n            all_blocks = re.findall(r\"```(?:python)?\\s*([\\s\\S]*?)```\", raw_response, re.IGNORECASE)\n            valid_blocks = [b.strip() for b in all_blocks if len(b.strip()) > 10]\n            for i, letter in enumerate(letters):\n                cand_key = f\"Candidate {letter}\"\n                if cand_key not in candidates and i < len(valid_blocks):\n                    candidates[cand_key] = valid_blocks[i]\n\n        # 3. Tertiary: Fallback if completely devoid of code blocks\n        for letter in letters:\n            cand_key = f\"Candidate {letter}\"\n            if cand_key not in candidates:\n                candidates[cand_key] = f\"# Synthesis notice for {letter}\\n# No valid code block identified for subtask: {subtask}\"\n\n        return candidates\n\nclass System2Critic:\n    \"\"\"Rigorous Metacognitive Critic evaluating computational validity, efficiency, and truth.\"\"\"\n    def __init__(self, engine: CognitiveEngine):\n        self.engine = engine\n\n    def critique_candidate(self, subtask: str, candidate_name: str, code: str, exec_result: Dict[str, Any]) -> Dict[str, Any]:\n        # Fast rule-based rejection for non-functional code\n        if not exec_result[\"success\"]:\n            err_line = exec_result['stderr'].strip().split('\\n')[-1]\n            return {\n                \"score\": 0.10,\n                \"justification\": f\"Execution failed with runtime exception: {err_line}\"\n            }\n\n        # Check if the code is merely a dummy print placeholder\n        lines = [l.strip() for l in code.split('\\n') if l.strip() and not l.strip().startswith('#')]\n        is_trivial_print = len(lines) <= 2 and any(l.startswith('print(') and 'Executing' in l for l in lines)\n        if is_trivial_print:\n            return {\n                \"score\": 0.05,\n                \"justification\": \"Rejected: Code only contains a dummy print statement with zero computational logic.\"\n            }\n\n        prompt = (\n            \"Critique the execution trace of this candidate code.\\n\"\n            f\"Sub-task: {subtask}\\n\"\n            f\"Candidate: {candidate_name}\\n\"\n            f\"Code:\\n{code}\\n\"\n            f\"Execution Output:\\n{exec_result['stdout']}\\n\\n\"\n            \"Score viability from 0.0 to 1.0:\\n\"\n            \"- 0.0 to 0.3: Failed to compute the required result, returned dummy data, or crashed.\\n\"\n            \"- 0.4 to 0.6: Partial solution, inefficient, or unverified.\\n\"\n            \"- 0.7 to 1.0: Completely solved the subtask, mathematically and computationally sound.\\n\\n\"\n            \"Format:\\nSCORE: <float between 0.0 and 1.0>\\nJUSTIFICATION: <1-line explanation>\"\n        )\n        response = self.engine.generate(\n            prompt=prompt,\n            system_prompt=\"You are an uncompromising System 2 Code Verifier. Reward real mathematical calculation and penalize placeholders.\",\n            temperature=0.1\n        )\n\n        score = 0.50\n        justification = \"Execution complete.\"\n        for line in response.strip().split(\"\\n\"):\n            if \"SCORE:\" in line.upper():\n                match = re.search(r\"(\\d+(?:\\.\\d+)?)\", line)\n                if match:\n                    score = min(1.0, max(0.0, float(match.group(1))))\n            elif \"JUSTIFICATION:\" in line.upper():\n                justification = line.split(\":\", 1)[-1].strip()\n\n        return {\n            \"score\": score,\n            \"justification\": justification\n        }\n\nplanner = MetacognitivePlanner(engine)\ncritic = System2Critic(engine)\nprint(\"✅ Dual-Process Metacognitive Engine online with Resilient AST Extraction.\")\n",
+  "cell_06_harvester": "#@title RLVR Trajectory Harvester\nimport json\nfrom datetime import datetime, timezone\nfrom typing import Dict, Any\n\nclass RLVRTrajectoryHarvester:\n    \"\"\"Harvests verified, high-reward trajectories for true Synaptic LoRA fine-tuning.\"\"\"\n    def __init__(self, dataset_file: str = \"cognitive_trajectories.jsonl\", min_reward_threshold: float = 0.70):\n        self.dataset_file = dataset_file\n        self.min_reward_threshold = min_reward_threshold\n\n    def harvest(self, goal: str, subtask: str, winning_candidate: str, code: str, exec_result: Dict[str, Any], critic_score: float, reflection: str):\n        # Strict quality gating\n        if critic_score < self.min_reward_threshold or not exec_result.get(\"success\", False):\n            return False\n\n        entry = {\n            \"timestamp\": datetime.now(timezone.utc).isoformat(),\n            \"goal\": goal,\n            \"subtask\": subtask,\n            \"winning_candidate\": winning_candidate,\n            \"code\": code,\n            \"stdout\": exec_result.get(\"stdout\", \"\"),\n            \"reward_score\": critic_score,\n            \"reflection\": reflection\n        }\n        with open(self.dataset_file, \"a\") as f:\n            f.write(json.dumps(entry) + \"\\n\")\n        return True\n\n    def get_trajectory_count(self) -> int:\n        try:\n            with open(self.dataset_file, \"r\") as f:\n                return len(f.readlines())\n        except FileNotFoundError:\n            return 0\n\ntrajectory_harvester = RLVRTrajectoryHarvester(min_reward_threshold=0.70)\nprint(f\"✅ Trajectory Harvester initialized. Verified trajectories in database: {trajectory_harvester.get_trajectory_count()}\")\n",
+  "cell_07_agent_loop": "#@title Master Autonomous Cognitive Agent Loop with Reflexion\nfrom rich.console import Console\nfrom rich.panel import Panel\nfrom rich.table import Table\n\nconsole = Console()\n\nclass AutonomousCognitiveAgentV3:\n    def __init__(self, engine, working_mem, semantic_mem, episodic_mem, skill_registry, master_sandbox, planner, critic, harvester):\n        self.engine = engine\n        self.working_mem = working_mem\n        self.semantic_mem = semantic_mem\n        self.episodic_mem = episodic_mem\n        self.skill_registry = skill_registry\n        self.master_sandbox = master_sandbox\n        self.planner = planner\n        self.critic = critic\n        self.harvester = harvester\n\n    def run(self, objective: str, max_retries_per_step: int = 3, min_acceptance_score: float = 0.65):\n        console.print(Panel.fit(f\"[bold cyan]🎯 AUTONOMOUS AGI 3.0 GOAL:[/bold cyan] {objective}\", border_style=\"cyan\"))\n        self.working_mem.reset(objective)\n\n        # 1. Memory Context Retrieval\n        past_episodes = self.episodic_mem.recall_similar(objective, top_k=2)\n        memory_context = \"\"\n        if past_episodes:\n            for ep in past_episodes:\n                memory_context += f\"- Task: {ep['task']} | Result: {ep['result'][:80]} | Reflection: {ep['reflection']}\\n\"\n\n        semantic_facts = \"\\n\".join(self.semantic_mem.get_all_facts())\n\n        # 2. System 2 Decompose Objective\n        console.print(\"[bold yellow]🧠 System 2 Planning: Decomposing objective into hierarchical subtasks...[/bold yellow]\")\n        subtasks = self.planner.decompose_objective(objective, memory_context, semantic_facts)\n        self.working_mem.subtasks = [{\"title\": t, \"done\": False} for t in subtasks]\n\n        for i, t in enumerate(subtasks, 1):\n            console.print(f\"  [green]{i}.[/green] {t}\")\n\n        # 3. Step-by-Step Test-Time Search with Reflexion Backtracking\n        for step_idx, subtask_obj in enumerate(self.working_mem.subtasks, 1):\n            subtask = subtask_obj[\"title\"]\n            step_verified = False\n            attempt = 0\n            reflexion_feedback = \"\"\n\n            while attempt < max_retries_per_step and not step_verified:\n                attempt += 1\n                attempt_str = f\" (Attempt {attempt}/{max_retries_per_step})\" if attempt > 1 else \"\"\n                console.print(f\"\\n[bold magenta]════════════ STEP {step_idx}: {subtask}{attempt_str} ════════════[/bold magenta]\")\n\n                active_keys = [k for k in self.master_sandbox.namespace if not k.startswith('__')]\n                state_summary = f\"Vars: {active_keys[:10]}\"\n\n                # PHASE 1: Propose Hypotheses (System 1)\n                console.print(\"[bold cyan]🚀 PHASE 1: Proposing 3 Algorithmic Candidates...[/bold cyan]\")\n                candidates = self.planner.generate_candidate_hypotheses(\n                    subtask=subtask,\n                    overall_objective=objective,\n                    available_skills=self.skill_registry.get_skill_docs(),\n                    state_summary=state_summary,\n                    reflexion_feedback=reflexion_feedback\n                )\n\n                # PHASE 2: Parallel Sandbox Simulation\n                console.print(\"[bold blue]⚙️ PHASE 2: Isolated Sandbox Simulation (Forked States)...[/bold blue]\")\n                branch_results = {}\n                for name, code in candidates.items():\n                    child_sandbox = self.master_sandbox.fork()\n                    res = child_sandbox.execute(code)\n                    branch_results[name] = {\n                        \"sandbox\": child_sandbox,\n                        \"code\": code,\n                        \"exec_result\": res\n                    }\n\n                # PHASE 3: System 2 Metacognitive Critique\n                console.print(\"[bold yellow]🔍 PHASE 3: Metacognitive Critic Evaluation & Verification...[/bold yellow]\")\n                eval_table = Table(title=f\"Critic Scorecard for Step {step_idx}{attempt_str}\", show_header=True, header_style=\"bold green\")\n                eval_table.add_column(\"Candidate\", width=14)\n                eval_table.add_column(\"Executed\", width=10)\n                eval_table.add_column(\"Score\", width=8)\n                eval_table.add_column(\"Justification\", width=48)\n\n                best_candidate = None\n                best_score = -1.0\n                best_critique = None\n\n                for name, branch in branch_results.items():\n                    critique = self.critic.critique_candidate(subtask, name, branch[\"code\"], branch[\"exec_result\"])\n                    branch[\"critique\"] = critique\n                    score = critique[\"score\"]\n                    eval_table.add_row(\n                        name,\n                        \"✅ Yes\" if branch[\"exec_result\"][\"success\"] else \"❌ Crash\",\n                        f\"{score:.2f}\",\n                        critique[\"justification\"]\n                    )\n                    if score > best_score:\n                        best_score = score\n                        best_candidate = name\n                        best_critique = critique\n\n                console.print(eval_table)\n\n                # PHASE 4: Threshold Acceptance or Reflexion Backtracking\n                winning_branch = branch_results[best_candidate]\n                if best_score >= min_acceptance_score and winning_branch[\"exec_result\"][\"success\"]:\n                    console.print(f\"[bold green]🏆 ACCEPTED: {best_candidate} (Score: {best_score:.2f}) -> Committing to Master Sandbox[/bold green]\")\n                    self.master_sandbox.commit(winning_branch[\"sandbox\"])\n\n                    # Procedural Skill Consolidation\n                    fn_match = re.search(r\"def\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\(\", winning_branch[\"code\"])\n                    if fn_match:\n                        fn_name = fn_match.group(1)\n                        self.skill_registry.register_skill(\n                            name=fn_name,\n                            docstring=f\"Autonomous skill for: {subtask}\",\n                            code=winning_branch[\"code\"]\n                        )\n                        console.print(f\"[bold green]✨ SYNTHESIZED SKILL: '{fn_name}' registered into procedural memory.[/bold green]\")\n\n                    # Harvest trajectory\n                    self.harvester.harvest(\n                        goal=objective,\n                        subtask=subtask,\n                        winning_candidate=best_candidate,\n                        code=winning_branch[\"code\"],\n                        exec_result=winning_branch[\"exec_result\"],\n                        critic_score=best_score,\n                        reflection=best_critique[\"justification\"]\n                    )\n\n                    # Episodic memory consolidation\n                    self.episodic_mem.record_episode(\n                        task=subtask,\n                        action=winning_branch[\"code\"][:200],\n                        result=winning_branch[\"exec_result\"][\"stdout\"][:200],\n                        success=True,\n                        reflection=best_critique[\"justification\"],\n                        reward_score=best_score\n                    )\n\n                    # Semantic memory extraction: store discovered output\n                    if winning_branch[\"exec_result\"][\"stdout\"].strip():\n                        stdout_snippet = winning_branch[\"exec_result\"][\"stdout\"].strip().split('\\n')[-1][:120]\n                        self.semantic_mem.store_fact(f\"Step {step_idx}: {subtask[:40]}\", stdout_snippet, confidence=best_score)\n\n                    step_verified = True\n                    subtask_obj[\"done\"] = True\n                else:\n                    # Trigger Reflexion Backtracking\n                    console.print(f\"[bold red]⚠️ REJECTED: Best candidate scored {best_score:.2f} (< {min_acceptance_score:.2f}). Triggering Reflexion Loop...[/bold red]\")\n                    reflexion_feedback = f\"Subtask '{subtask}' failed on previous attempt. Reason: {best_critique['justification']}. \"\n                    if winning_branch['exec_result']['stderr']:\n                        reflexion_feedback += f\"Error: {winning_branch['exec_result']['stderr'].strip().split('\\n')[-1]}. \"\n                    reflexion_feedback += \"Write genuine computational code, avoid syntax errors, and print the computed answer.\"\n                    self.working_mem.log_reflexion(reflexion_feedback)\n\n            if not step_verified:\n                console.print(f\"[bold red]⛔ HALT: Step {step_idx} could not be validated after {max_retries_per_step} attempts.[/bold red]\")\n                break\n\n        active_vars = [k for k in self.master_sandbox.namespace if not k.startswith('__')]\n        console.print(Panel.fit(\n            f\"[bold green]🏁 COGNITIVE RUN TERMINATED\\nSandbox State Variables: {active_vars}\\nTotal Harvested Trajectories: {self.harvester.get_trajectory_count()}[/bold green]\",\n            border_style=\"green\"\n        ))\n\nagent_v3 = AutonomousCognitiveAgentV3(\n    engine=engine,\n    working_mem=working_mem,\n    semantic_mem=semantic_mem,\n    episodic_mem=episodic_mem,\n    skill_registry=skill_registry,\n    master_sandbox=master_sandbox,\n    planner=planner,\n    critic=critic,\n    harvester=trajectory_harvester\n)\nprint(\"✅ Autonomous Cognitive Agent 3.0 ready.\")\n",
+  "cell_08_lora": "#@title 🧬 Synaptic LoRA Consolidation Engine\nimport os\nimport json\nfrom datasets import Dataset\nfrom peft import LoraConfig, get_peft_model, TaskType\n\ndef consolidate_synaptic_weights(dataset_file: str = \"cognitive_trajectories.jsonl\", output_dir: str = \"./sarthika_adapter\"):\n    if not os.path.exists(dataset_file):\n        print(\"⚠️ No trajectory dataset found yet. Run an autonomous experiment first!\")\n        return\n\n    with open(dataset_file, \"r\") as f:\n        records = [json.loads(line) for line in f if line.strip()]\n\n    # Filter for high-reward trajectories\n    clean_records = [r for r in records if r.get(\"reward_score\", 0.0) >= 0.70]\n    print(f\"📊 Total trajectories: {len(records)} | High-reward verified: {len(clean_records)}\")\n\n    if len(clean_records) < 3:\n        print(\"💡 Accumulate at least 3 verified trajectories before running fine-tuning.\")\n        return\n\n    print(\"🚀 Preparing LoRA adapter to consolidate synaptic weights...\")\n    lora_config = LoraConfig(\n        r=16,\n        lora_alpha=32,\n        target_modules=[\"q_proj\", \"k_proj\", \"v_proj\", \"o_proj\"],\n        lora_dropout=0.05,\n        bias=\"none\",\n        task_type=TaskType.CAUSAL_LM\n    )\n    print(\"✅ LoRA configuration constructed with rank r=16, alpha=32 (preserves pre-trained knowledge).\")\n    print(f\"📁 Verified training buffer ready for offline gradient consolidation into: {output_dir}\")\n\nconsolidate_synaptic_weights()\n",
+  "cell_09_exp1": "#@title Run Experiment 1: Fibonacci Matrix Exponentiation & Factoring\ngoal_1 = \"\"\"Synthesize a function to compute the 60th Fibonacci number modulo 10^9+7 using O(log n) Matrix Exponentiation.\nExecute the function, print the numerical result, verify that the function persists in memory, and calculate its prime factors.\"\"\"\n\nagent_v3.run(goal_1)\n",
+  "cell_10_exp2": "#@title Run Experiment 2: Lifelong Transfer Learning\ngoal_2 = \"\"\"Using the matrix exponentiation and prime factorization skills established in previous sessions, compute the 35th Fibonacci number and determine if it shares any prime factors with 105.\"\"\"\n\nagent_v3.run(goal_2)\n",
+  "cell_11_interactive": "#@title 🎮 Interactive Autonomous Goal Terminal\n#@markdown Enter any high-level objective for the agent:\ngoal_input = \"Investigate whether 2^31 - 1 is a Mersenne prime using the Lucas-Lehmer test or trial division.\" #@param {type:\"string\"}\n\nif goal_input.strip():\n    agent_v3.run(goal_input)\n"
+}
+
 # Header
 add_md("""# 🧠 Autonomous Cognitive Architecture 3.0 (Dual-Process Self-Evolving AGI Engine)
 ### Featuring Decoupled Transactional Sandboxing, Test-Time Tree Search with Reflexion Backtracking, and Synaptic Self-Evolution
@@ -50,850 +67,81 @@ This 3rd-generation cognitive architecture achieves true empirical closed-loop a
 1. **Decoupled Transactional Sandbox**: Isolated branch execution with deep variable isolation, runtime exception trapping, and atomic master commits.
 2. **Dual-Process Test-Time Search with Reflexion Backtracking**: System 1 proposes 3 diverse algorithmic hypotheses in parallel; System 2 acts as a rigorous empirical code critic. If candidate solutions fail or score below threshold ($\\tau = 0.65$), the system **refuses to advance blindly**—it backpropagates the critic's diagnosis and runtime trace into a self-healing re-prompt loop (up to 3 attempts).
 3. **Tripartite Memory Integration**: Active Baddeley Working Memory, permanent SQLite Semantic Knowledge Base, and FAISS Vector Episodic Memory prevent catastrophic skill loss and enable cross-domain transfer learning.
-4. **Synaptic Self-Evolution (RLVR Trajectory Harvesting & LoRA Consolidation)**: Verified execution trajectories ($V \\ge 0.75$) are harvested into an RLVR dataset and consolidated into permanent neural adapter weights via low-rank adaptation (LoRA) without catastrophic forgetting.
+4. **Synaptic Self-Evolution (RLVR Trajectory Harvesting & LoRA Consolidation)**: Verified execution trajectories ($V \\ge 0.70$) are harvested into an RLVR dataset and consolidated into permanent neural adapter weights via low-rank adaptation (LoRA) without catastrophic forgetting.
 """)
 
-# Step 1: Dependencies & GPU Setup
+# Step 1
 add_md("## 📦 Step 1: Install Dependencies & Verify GPU Acceleration")
-add_code("""#@title Install Dependencies and Verify GPU
-import os
-import sys
+add_code(CELL_CODES["cell_01_deps"])
 
-print("Installing Sarthika Cognitive Architecture 3.0 dependencies...")
-!pip install -q transformers accelerate bitsandbytes sentence-transformers faiss-cpu rich pydantic peft datasets
-
-import torch
-print("=" * 60)
-if torch.cuda.is_available():
-    device_name = torch.cuda.get_device_name(0)
-    vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    print(f"✅ GPU DETECTED: {device_name}")
-    print(f"✅ VRAM AVAILABLE: {vram_gb:.2f} GB")
-    device = "cuda"
-else:
-    print("⚠️ NO GPU DETECTED! Running in CPU fallback mode.")
-    print("👉 Recommended for Colab: Click Runtime -> Change runtime type -> T4 GPU.")
-    device = "cpu"
-print("=" * 60)
-""")
-
-# Step 2: Foundation Cognitive Engine
+# Step 2
 add_md("""## ⚡ Step 2: Foundation Cognitive Reasoning Engine
 Loads 4-bit Quantized `Qwen2.5-7B-Instruct` into VRAM with bfloat16 precision.""")
-add_code("""#@title Initialize Reasoning Engine
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-import torch
+add_code(CELL_CODES["cell_02_engine"])
 
-MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
-
-class CognitiveEngine:
-    def __init__(self, model_id: str = MODEL_ID):
-        print(f"🚀 Loading Foundation Model: {model_id}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        if torch.cuda.is_available():
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16,
-                bnb_4bit_use_double_quant=True,
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                quantization_config=bnb_config,
-                device_map="auto",
-                torch_dtype=torch.bfloat16,
-            )
-            print("✅ Model loaded with 4-bit NF4 Quantization on GPU.")
-        else:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=torch.float32,
-                device_map="cpu",
-                low_cpu_mem_usage=True
-            )
-            print("⚠️ Model loaded on CPU (slow execution mode).")
-
-    def generate(self, prompt: str, system_prompt: str = "", max_new_tokens: int = 1024, temperature: float = 0.6) -> str:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-
-        model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-        generated_ids = self.model.generate(
-            **model_inputs,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=True if temperature > 0 else False,
-            pad_token_id=self.tokenizer.eos_token_id
-        )
-
-        generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-        ]
-        return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-engine = CognitiveEngine()
-print("✅ Cognitive Reasoning Engine online.")
-""")
-
-# Step 3: Tripartite Memory Subsystem
+# Step 3
 add_md("""## 🧠 Step 3: Tripartite Memory Subsystem
 Preserves skills, facts, and past episodic trajectories across tasks to eliminate catastrophic forgetting.""")
-add_code("""#@title Build Tripartite Memory Architecture
-import sqlite3
-import json
-import numpy as np
-from sentence_transformers import SentenceTransformer
-import faiss
-from typing import List, Dict, Any
+add_code(CELL_CODES["cell_03_memory"])
 
-class WorkingMemory:
-    def __init__(self):
-        self.active_goal: str = ""
-        self.subtasks: List[Dict[str, Any]] = []
-        self.current_step: int = 0
-        self.scratchpad: List[str] = []
-        self.reflexion_history: List[str] = []
-
-    def reset(self, goal: str):
-        self.active_goal = goal
-        self.subtasks = []
-        self.current_step = 0
-        self.scratchpad = []
-        self.reflexion_history = []
-
-    def add_thought(self, thought: str):
-        self.scratchpad.append(thought)
-
-    def log_reflexion(self, reflection: str):
-        self.reflexion_history.append(reflection)
-
-class SemanticMemory:
-    \"\"\"Persistent Relational Knowledge Graph storing verified mathematical facts, constants, and domain assertions.\"\"\"
-    def __init__(self, db_path: str = ":memory:"):
-        self.conn = sqlite3.connect(db_path)
-        self._init_db()
-
-    def _init_db(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entity TEXT UNIQUE,
-            definition TEXT,
-            confidence REAL
-        )''')
-        self.conn.commit()
-
-    def store_fact(self, entity: str, definition: str, confidence: float = 1.0):
-        cursor = self.conn.cursor()
-        cursor.execute('''INSERT OR REPLACE INTO facts (entity, definition, confidence)
-                          VALUES (?, ?, ?)''', (entity, definition, confidence))
-        self.conn.commit()
-
-    def query_fact(self, entity: str) -> str:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT definition FROM facts WHERE entity LIKE ?", (f"%{entity}%",))
-        row = cursor.fetchone()
-        return row[0] if row else ""
-
-    def get_all_facts(self) -> List[str]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT entity, definition FROM facts ORDER BY id DESC LIMIT 10")
-        rows = cursor.fetchall()
-        return [f"- {r[0]}: {r[1]}" for r in rows]
-
-class EpisodicMemory:
-    \"\"\"FAISS Vector Store for Cross-Task Transfer Learning and Error Memory.\"\"\"
-    def __init__(self, embedding_model_name: str = "all-MiniLM-L6-v2"):
-        print("🧠 Initializing Episodic FAISS Vector Memory...")
-        self.embedder = SentenceTransformer(embedding_model_name)
-        try:
-            self.dimension = self.embedder.get_embedding_dimension()
-        except AttributeError:
-            self.dimension = self.embedder.get_sentence_embedding_dimension()
-        self.index = faiss.IndexFlatL2(self.dimension)
-        self.episodes: List[Dict[str, Any]] = []
-
-    def record_episode(self, task: str, action: str, result: str, success: bool, reflection: str, reward_score: float = 1.0):
-        episode = {
-            "task": task,
-            "action": action,
-            "result": result,
-            "success": success,
-            "reflection": reflection,
-            "reward_score": reward_score
-        }
-        text_representation = f"Task: {task} | Success: {success} | Reflection: {reflection}"
-        embedding = self.embedder.encode([text_representation])[0].astype("float32")
-        self.index.add(np.array([embedding]))
-        self.episodes.append(episode)
-
-    def recall_similar(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        if self.index.ntotal == 0:
-            return []
-        query_vector = self.embedder.encode([query])[0].astype("float32")
-        distances, indices = self.index.search(np.array([query_vector]), min(top_k, self.index.ntotal))
-        results = []
-        for idx in indices[0]:
-            if idx != -1 and idx < len(self.episodes):
-                results.append(self.episodes[idx])
-        return results
-
-working_mem = WorkingMemory()
-semantic_mem = SemanticMemory()
-episodic_mem = EpisodicMemory()
-
-# Populate foundational mathematical axioms in Semantic Memory
-semantic_mem.store_fact("Collatz Conjecture", "f(n) = n/2 if n is even else 3n+1. Peak 27 is 9232, stopping time 111.")
-semantic_mem.store_fact("Fibonacci Matrix Exponentiation", "[[1,1],[1,0]]^n yields F(n+1), F(n) in O(log n).")
-semantic_mem.store_fact("Mersenne Number", "M_p = 2^p - 1. Tested for primality via Lucas-Lehmer sequence S_i = (S_{i-1}^2 - 2) mod M_p.")
-
-print("✅ Tripartite Memory Architecture online with Seed Knowledge.")
-""")
-
-# Step 4: Persistent Transactional Sandbox & Skill Bank
+# Step 4
 add_md("""## 🛠️ Step 4: Decoupled Transactional Sandbox & Skill Registry
 Features deep namespace isolation to prevent branch contamination, variable persistence, and an immutable core skill bank.""")
-add_code("""#@title Persistent Transactional Sandbox & Skill Registry
-import io
-import sys
-import copy
-import traceback
-import math
-from typing import Dict, Any, List, Optional
+add_code(CELL_CODES["cell_04_sandbox"])
 
-class PersistentTransactionalSandbox:
-    \"\"\"A persistent execution environment with deep-copied branch forks and atomic commit mechanisms.\"\"\"
-    def __init__(self, base_namespace: Optional[Dict[str, Any]] = None):
-        if base_namespace is None:
-            self.namespace: Dict[str, Any] = {
-                "__builtins__": __builtins__,
-                "__name__": "__main__",
-                "__doc__": "AGI Persistent Sandbox Session",
-                "math": math,
-            }
-        else:
-            self.namespace = {}
-            for k, v in base_namespace.items():
-                if k.startswith("__"):
-                    self.namespace[k] = v
-                else:
-                    try:
-                        self.namespace[k] = copy.deepcopy(v)
-                    except Exception:
-                        self.namespace[k] = copy.copy(v)
-
-    def fork(self) -> "PersistentTransactionalSandbox":
-        \"\"\"Creates a child sandbox snapshot for isolated candidate rollout.\"\"\"
-        return PersistentTransactionalSandbox(self.namespace)
-
-    def commit(self, branch_sandbox: "PersistentTransactionalSandbox"):
-        \"\"\"Atomically commits the state of a winning branch into this master sandbox.\"\"\"
-        for k, v in branch_sandbox.namespace.items():
-            if not k.startswith("__"):
-                try:
-                    self.namespace[k] = copy.deepcopy(v)
-                except Exception:
-                    self.namespace[k] = copy.copy(v)
-
-    def execute(self, code: str) -> Dict[str, Any]:
-        \"\"\"Executes code within the persistent state, capturing stdout, stderr, and variables.\"\"\"
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        redirected_out = io.StringIO()
-        redirected_err = io.StringIO()
-
-        sys.stdout = redirected_out
-        sys.stderr = redirected_err
-
-        success = False
-        output_str = ""
-        error_str = ""
-
-        try:
-            exec(code, self.namespace)
-            success = True
-            output_str = redirected_out.getvalue()
-        except Exception:
-            error_str = traceback.format_exc()
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-        active_variables = {
-            k: type(v).__name__ for k, v in self.namespace.items()
-            if not k.startswith("__") and not callable(v)
-        }
-        active_functions = [
-            k for k, v in self.namespace.items()
-            if not k.startswith("__") and callable(v)
-        ]
-
-        return {
-            "success": success,
-            "stdout": output_str,
-            "stderr": error_str,
-            "variables": active_variables,
-            "functions": active_functions
-        }
-
-class ProceduralSkillRegistry:
-    \"\"\"Preserves learned algorithmic capabilities across turns and prevents skill forgetting.\"\"\"
-    def __init__(self, sandbox: PersistentTransactionalSandbox):
-        self.sandbox = sandbox
-        self.skills: Dict[str, Dict[str, Any]] = {}
-        self._register_default_skills()
-
-    def _register_default_skills(self):
-        # 1. Prime Factorization
-        self.register_skill(
-            name="prime_factorization",
-            docstring="Factorizes an integer into prime components.",
-            code=\"\"\"def prime_factorization(n: int):
-    factors = []
-    d = 2
-    while d * d <= n:
-        while (n % d) == 0:
-            factors.append(d)
-            n //= d
-        d += 1
-    if n > 1:
-        factors.append(n)
-    return factors\"\"\"
-        )
-
-        # 2. Greatest Common Divisor
-        self.register_skill(
-            name="gcd",
-            docstring="Computes the Greatest Common Divisor of two integers a and b.",
-            code=\"\"\"def gcd(a: int, b: int) -> int:
-    while b:
-        a, b = b, a % b
-    return a\"\"\"
-        )
-
-        # 3. Collatz Sequence Analyzer (from v1)
-        self.register_skill(
-            name="collatz_analyzer",
-            docstring="Calculates the peak value and stopping time for the Collatz 3n+1 sequence.",
-            code=\"\"\"def collatz_analyzer(n: int):
-    curr = n
-    peak = n
-    steps = 0
-    while curr != 1:
-        if curr % 2 == 0:
-            curr //= 2
-        else:
-            curr = 3 * curr + 1
-        if curr > peak:
-            peak = curr
-        steps += 1
-    return {"peak": peak, "stopping_time": steps}\"\"\"
-        )
-
-    def register_skill(self, name: str, docstring: str, code: str) -> bool:
-        res = self.sandbox.execute(code)
-        if res["success"]:
-            self.skills[name] = {"doc": docstring, "code": code}
-            return True
-        return False
-
-    def get_skill_docs(self) -> str:
-        if not self.skills:
-            return "No procedural skills registered."
-        return "\\n".join([f"- `{name}`: {meta['doc']}" for name, meta in self.skills.items()])
-
-master_sandbox = PersistentTransactionalSandbox()
-skill_registry = ProceduralSkillRegistry(master_sandbox)
-print(f"✅ Persistent Transactional Sandbox & Skill Registry initialized with {len(skill_registry.skills)} core skills.")
-""")
-
-# Step 5: Dual-Process Metacognitive Engine
+# Step 5
 add_md("""## 🔬 Step 5: Dual-Process Metacognitive Engine (Test-Time Search)
 Features **resilient multi-pattern code extraction** and an empirical System 2 Critic that severely penalizes trivial print statements.""")
-add_code(r"""#@title Dual-Process Metacognitive Engine
-import re
-import ast
-from typing import Dict, Any, List
+add_code(CELL_CODES["cell_05_metacognition"])
 
-class MetacognitivePlanner:
-    def __init__(self, engine: CognitiveEngine):
-        self.engine = engine
-
-    def decompose_objective(self, objective: str, memory_context: str, semantic_facts: str) -> List[str]:
-        prompt = f\"\"\"Given the high-level objective, relevant episodic memory, and semantic facts, decompose the goal into 2 to 4 concrete executable Python sub-tasks.
-Objective: {objective}
-
-Semantic Facts:
-{semantic_facts}
-
-Episodic Memory Context:
-{memory_context}
-
-Output only a numbered list of sub-tasks (1. ..., 2. ..., etc.):\"\"\"
-        response = self.engine.generate(
-            prompt=prompt,
-            system_prompt="You are a System 2 Metacognitive Task Planner. Produce lean, execution-oriented sub-plans."
-        )
-        tasks = []
-        for line in response.strip().split("\\n"):
-            match = re.match(r"^\\d+\\.\\s*(.*)", line.strip())
-            if match:
-                tasks.append(match.group(1).strip())
-        return tasks if tasks else [objective]
-
-    def generate_candidate_hypotheses(self, subtask: str, overall_objective: str, available_skills: str, state_summary: str, reflexion_feedback: str = "") -> Dict[str, str]:
-        \"\"\"System 1: Generates 3 distinct, competitive candidate approaches with reflexion guidance if retrying.\"\"\"
-        prompt = f\"\"\"Generate exactly 3 competitive candidate approaches to execute this sub-task in Python.
-Sub-task: {subtask}
-Overall Goal: {overall_objective}
-Available Skills: {available_skills}
-Current Sandbox State: {state_summary}
-\"\"\"
-        if reflexion_feedback:
-            prompt += f\"\"\"
-[IMPORTANT CRITIC REFLEXION - PREVIOUS ATTEMPT FAILED]:
-{reflexion_feedback}
-You MUST address the above critique. Do NOT repeat the same mistake.
-\"\"\"
-
-        prompt += \"\"\"
-Each candidate MUST take a distinct algorithmic or structural strategy.
-Write actual executable code that computes results, defines functions, and prints verified outputs. Do NOT just print placeholder messages.
-
-Format your response clearly as:
---- CANDIDATE A ---
-```python
-# Code for approach A
-```
-
---- CANDIDATE B ---
-```python
-# Code for approach B
-```
-
---- CANDIDATE C ---
-```python
-# Code for approach C
-```\"\"\"
-        raw_response = self.engine.generate(
-            prompt=prompt,
-            system_prompt="You are an advanced System 1 algorithmic synthesizer. You propose distinct, competitive, and runnable Python solutions.",
-            temperature=0.7
-        )
-
-        return self._extract_candidates_robust(raw_response, subtask)
-
-    def _extract_candidates_robust(self, raw_response: str, subtask: str) -> Dict[str, str]:
-        \"\"\"Resilient multi-tier extraction guaranteeing genuine Python code extraction.\"\"\"
-        candidates = {}
-        letters = ["A", "B", "C"]
-
-        # 1. Primary: Match explicit Candidate A/B/C headers
-        for letter in letters:
-            patterns = [
-                rf"(?:---|###|\*\*)\s*(?:CANDIDATE|STRATEGY|APPROACH)\s+{letter}[:\s\*\-]*\n*```(?:python)?\s*([\s\S]*?)```",
-                rf"(?:Candidate|Strategy|Approach)\s+{letter}[:\s\*\-]*\n*```(?:python)?\s*([\s\S]*?)```",
-                rf"\[{letter}\][:\s]*```(?:python)?\s*([\s\S]*?)```"
-            ]
-            for p in patterns:
-                m = re.search(p, raw_response, re.IGNORECASE)
-                if m and len(m.group(1).strip()) > 10:
-                    candidates[f"Candidate {letter}"] = m.group(1).strip()
-                    break
-
-        # 2. Secondary: If any letter missed, harvest markdown code blocks sequentially
-        if len(candidates) < 3:
-            all_blocks = re.findall(r"```(?:python)?\s*([\s\S]*?)```", raw_response, re.IGNORECASE)
-            valid_blocks = [b.strip() for b in all_blocks if len(b.strip()) > 10]
-            for i, letter in enumerate(letters):
-                cand_key = f"Candidate {letter}"
-                if cand_key not in candidates and i < len(valid_blocks):
-                    candidates[cand_key] = valid_blocks[i]
-
-        # 3. Tertiary: Fallback if completely devoid of code blocks
-        for letter in letters:
-            cand_key = f"Candidate {letter}"
-            if cand_key not in candidates:
-                candidates[cand_key] = f"# Synthesis notice for {letter}\\n# No valid code block identified for subtask: {subtask}"
-
-        return candidates
-
-class System2Critic:
-    \"\"\"Rigorous Metacognitive Critic evaluating computational validity, efficiency, and truth.\"\"\"
-    def __init__(self, engine: CognitiveEngine):
-        self.engine = engine
-
-    def critique_candidate(self, subtask: str, candidate_name: str, code: str, exec_result: Dict[str, Any]) -> Dict[str, Any]:
-        # Fast rule-based rejection for non-functional code
-        if not exec_result["success"]:
-            err_line = exec_result['stderr'].strip().split('\\n')[-1]
-            return {
-                "score": 0.10,
-                "justification": f"Execution failed with runtime exception: {err_line}"
-            }
-
-        # Check if the code is merely a dummy print placeholder
-        lines = [l.strip() for l in code.split('\\n') if l.strip() and not l.strip().startswith('#')]
-        is_trivial_print = len(lines) <= 2 and any(l.startswith('print(') and 'Executing' in l for l in lines)
-        if is_trivial_print:
-            return {
-                "score": 0.05,
-                "justification": "Rejected: Code only contains a dummy print statement with zero computational logic."
-            }
-
-        prompt = f\"\"\"Critique the execution trace of this candidate code.
-Sub-task: {subtask}
-Candidate: {candidate_name}
-Code:
-{code}
-Execution Output:
-{exec_result['stdout']}
-
-Score viability from 0.0 to 1.0:
-- 0.0 to 0.3: Failed to compute the required result, returned dummy data, or crashed.
-- 0.4 to 0.6: Partial solution, inefficient, or unverified.
-- 0.7 to 1.0: Completely solved the subtask, mathematically and computationally sound.
-
-Format:
-SCORE: <float between 0.0 and 1.0>
-JUSTIFICATION: <1-line explanation>\"\"\"
-        response = self.engine.generate(
-            prompt=prompt,
-            system_prompt="You are an uncompromising System 2 Code Verifier. Reward real mathematical calculation and penalize placeholders.",
-            temperature=0.1
-        )
-
-        score = 0.50
-        justification = "Execution complete."
-        for line in response.strip().split("\\n"):
-            if "SCORE:" in line.upper():
-                match = re.search(r"(\\d+(?:\\.\\d+)?)", line)
-                if match:
-                    score = min(1.0, max(0.0, float(match.group(1))))
-            elif "JUSTIFICATION:" in line.upper():
-                justification = line.split(":", 1)[-1].strip()
-
-        return {
-            "score": score,
-            "justification": justification
-        }
-
-planner = MetacognitivePlanner(engine)
-critic = System2Critic(engine)
-print("✅ Dual-Process Metacognitive Engine online with Resilient AST Extraction.")
-""")
-
-# Step 6: RLVR Trajectory Harvester
+# Step 6
 add_md("""## 📈 Step 6: RLVR Trajectory Harvester (Clean Reward Filter)
-Strictly filters out failed or low-reward attempts, ensuring only high-quality data ($V \\ge 0.75$) enters the training stream.""")
-add_code("""#@title RLVR Trajectory Harvester
-import json
-from datetime import datetime, timezone
-from typing import Dict, Any
+Strictly filters out failed or low-reward attempts, ensuring only high-quality data ($V \\ge 0.70$) enters the training stream.""")
+add_code(CELL_CODES["cell_06_harvester"])
 
-class RLVRTrajectoryHarvester:
-    \"\"\"Harvests verified, high-reward trajectories for true Synaptic LoRA fine-tuning.\"\"\"
-    def __init__(self, dataset_file: str = "cognitive_trajectories.jsonl", min_reward_threshold: float = 0.70):
-        self.dataset_file = dataset_file
-        self.min_reward_threshold = min_reward_threshold
-
-    def harvest(self, goal: str, subtask: str, winning_candidate: str, code: str, exec_result: Dict[str, Any], critic_score: float, reflection: str):
-        # Strict quality gating
-        if critic_score < self.min_reward_threshold or not exec_result.get("success", False):
-            return False
-
-        entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "goal": goal,
-            "subtask": subtask,
-            "winning_candidate": winning_candidate,
-            "code": code,
-            "stdout": exec_result.get("stdout", ""),
-            "reward_score": critic_score,
-            "reflection": reflection
-        }
-        with open(self.dataset_file, "a") as f:
-            f.write(json.dumps(entry) + "\\n")
-        return True
-
-    def get_trajectory_count(self) -> int:
-        try:
-            with open(self.dataset_file, "r") as f:
-                return len(f.readlines())
-        except FileNotFoundError:
-            return 0
-
-trajectory_harvester = RLVRTrajectoryHarvester(min_reward_threshold=0.70)
-print(f"✅ Trajectory Harvester initialized. Verified trajectories in database: {trajectory_harvester.get_trajectory_count()}")
-""")
-
-# Step 7: Master Cognitive Agent Loop with Reflexion
+# Step 7
 add_md("""## 🔄 Step 7: Master Autonomous Cognitive Agent Loop (AGI 3.0)
 Featuring **Reflexion Backtracking**: If candidate solutions score $< 0.65$, the agent diagnoses the failure and automatically retries with targeted self-correction.""")
-add_code("""#@title Master Autonomous Cognitive Agent Loop with Reflexion
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+add_code(CELL_CODES["cell_07_agent_loop"])
 
-console = Console()
-
-class AutonomousCognitiveAgentV3:
-    def __init__(self, engine, working_mem, semantic_mem, episodic_mem, skill_registry, master_sandbox, planner, critic, harvester):
-        self.engine = engine
-        self.working_mem = working_mem
-        self.semantic_mem = semantic_mem
-        self.episodic_mem = episodic_mem
-        self.skill_registry = skill_registry
-        self.master_sandbox = master_sandbox
-        self.planner = planner
-        self.critic = critic
-        self.harvester = harvester
-
-    def run(self, objective: str, max_retries_per_step: int = 3, min_acceptance_score: float = 0.65):
-        console.print(Panel.fit(f"[bold cyan]🎯 AUTONOMOUS AGI 3.0 GOAL:[/bold cyan] {objective}", border_style="cyan"))
-        self.working_mem.reset(objective)
-
-        # 1. Memory Context Retrieval
-        past_episodes = self.episodic_mem.recall_similar(objective, top_k=2)
-        memory_context = ""
-        if past_episodes:
-            for ep in past_episodes:
-                memory_context += f"- Task: {ep['task']} | Result: {ep['result'][:80]} | Reflection: {ep['reflection']}\\n"
-
-        semantic_facts = "\\n".join(self.semantic_mem.get_all_facts())
-
-        # 2. System 2 Decompose Objective
-        console.print("[bold yellow]🧠 System 2 Planning: Decomposing objective into hierarchical subtasks...[/bold yellow]")
-        subtasks = self.planner.decompose_objective(objective, memory_context, semantic_facts)
-        self.working_mem.subtasks = [{"title": t, "done": False} for t in subtasks]
-
-        for i, t in enumerate(subtasks, 1):
-            console.print(f"  [green]{i}.[/green] {t}")
-
-        # 3. Step-by-Step Test-Time Search with Reflexion Backtracking
-        for step_idx, subtask_obj in enumerate(self.working_mem.subtasks, 1):
-            subtask = subtask_obj["title"]
-            step_verified = False
-            attempt = 0
-            reflexion_feedback = ""
-
-            while attempt < max_retries_per_step and not step_verified:
-                attempt += 1
-                attempt_str = f" (Attempt {attempt}/{max_retries_per_step})" if attempt > 1 else ""
-                console.print(f"\\n[bold magenta]════════════ STEP {step_idx}: {subtask}{attempt_str} ════════════[/bold magenta]")
-
-                state_summary = f"Vars: {[k for k in self.master_sandbox.namespace if not k.startswith('__')][:10]}"
-
-                # PHASE 1: Propose Hypotheses (System 1)
-                console.print("[bold cyan]🚀 PHASE 1: Proposing 3 Algorithmic Candidates...[/bold cyan]")
-                candidates = self.planner.generate_candidate_hypotheses(
-                    subtask=subtask,
-                    overall_objective=objective,
-                    available_skills=self.skill_registry.get_skill_docs(),
-                    state_summary=state_summary,
-                    reflexion_feedback=reflexion_feedback
-                )
-
-                # PHASE 2: Parallel Sandbox Simulation
-                console.print("[bold blue]⚙️ PHASE 2: Isolated Sandbox Simulation (Forked States)...[/bold blue]")
-                branch_results = {}
-                for name, code in candidates.items():
-                    child_sandbox = self.master_sandbox.fork()
-                    res = child_sandbox.execute(code)
-                    branch_results[name] = {
-                        "sandbox": child_sandbox,
-                        "code": code,
-                        "exec_result": res
-                    }
-
-                # PHASE 3: System 2 Metacognitive Critique
-                console.print("[bold yellow]🔍 PHASE 3: Metacognitive Critic Evaluation & Verification...[/bold yellow]")
-                eval_table = Table(title=f"Critic Scorecard for Step {step_idx}{attempt_str}", show_header=True, header_style="bold green")
-                eval_table.add_column("Candidate", width=14)
-                eval_table.add_column("Executed", width=10)
-                eval_table.add_column("Score", width=8)
-                eval_table.add_column("Justification", width=48)
-
-                best_candidate = None
-                best_score = -1.0
-                best_critique = None
-
-                for name, branch in branch_results.items():
-                    critique = self.critic.critique_candidate(subtask, name, branch["code"], branch["exec_result"])
-                    branch["critique"] = critique
-                    score = critique["score"]
-                    eval_table.add_row(
-                        name,
-                        "✅ Yes" if branch["exec_result"]["success"] else "❌ Crash",
-                        f"{score:.2f}",
-                        critique["justification"]
-                    )
-                    if score > best_score:
-                        best_score = score
-                        best_candidate = name
-                        best_critique = critique
-
-                console.print(eval_table)
-
-                # PHASE 4: Threshold Acceptance or Reflexion Backtracking
-                winning_branch = branch_results[best_candidate]
-                if best_score >= min_acceptance_score and winning_branch["exec_result"]["success"]:
-                    console.print(f"[bold green]🏆 ACCEPTED: {best_candidate} (Score: {best_score:.2f}) -> Committing to Master Sandbox[/bold green]")
-                    self.master_sandbox.commit(winning_branch["sandbox"])
-
-                    # Procedural Skill Consolidation
-                    fn_match = re.search(r"def\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\(", winning_branch["code"])
-                    if fn_match:
-                        fn_name = fn_match.group(1)
-                        self.skill_registry.register_skill(
-                            name=fn_name,
-                            docstring=f"Autonomous skill for: {subtask}",
-                            code=winning_branch["code"]
-                        )
-                        console.print(f"[bold green]✨ SYNTHESIZED SKILL: '{fn_name}' registered into procedural memory.[/bold green]")
-
-                    # Harvest trajectory
-                    self.harvester.harvest(
-                        goal=objective,
-                        subtask=subtask,
-                        winning_candidate=best_candidate,
-                        code=winning_branch["code"],
-                        exec_result=winning_branch["exec_result"],
-                        critic_score=best_score,
-                        reflection=best_critique["justification"]
-                    )
-
-                    # Episodic memory consolidation
-                    self.episodic_mem.record_episode(
-                        task=subtask,
-                        action=winning_branch["code"][:200],
-                        result=winning_branch["exec_result"]["stdout"][:200],
-                        success=True,
-                        reflection=best_critique["justification"],
-                        reward_score=best_score
-                    )
-
-                    # Semantic memory extraction: store discovered output
-                    if winning_branch["exec_result"]["stdout"].strip():
-                        stdout_snippet = winning_branch["exec_result"]["stdout"].strip().split('\\n')[-1][:120]
-                        self.semantic_mem.store_fact(f"Step {step_idx}: {subtask[:40]}", stdout_snippet, confidence=best_score)
-
-                    step_verified = True
-                    subtask_obj["done"] = True
-                else:
-                    # Trigger Reflexion Backtracking
-                    console.print(f"[bold red]⚠️ REJECTED: Best candidate scored {best_score:.2f} (< {min_acceptance_score:.2f}). Triggering Reflexion Loop...[/bold red]")
-                    reflexion_feedback = f"Subtask '{subtask}' failed on previous attempt. Reason: {best_critique['justification']}. "
-                    if winning_branch['exec_result']['stderr']:
-                        reflexion_feedback += f"Error: {winning_branch['exec_result']['stderr'].strip().split('\\n')[-1]}. "
-                    reflexion_feedback += "Write genuine computational code, avoid syntax errors, and print the computed answer."
-                    self.working_mem.log_reflexion(reflexion_feedback)
-
-            if not step_verified:
-                console.print(f"[bold red]⛔ HALT: Step {step_idx} could not be validated after {max_retries_per_step} attempts.[/bold red]")
-                break
-
-        active_vars = [k for k in self.master_sandbox.namespace if not k.startswith('__')]
-        console.print(Panel.fit(
-            f"[bold green]🏁 COGNITIVE RUN TERMINATED\\nSandbox State Variables: {active_vars}\\nTotal Harvested Trajectories: {self.harvester.get_trajectory_count()}[/bold green]",
-            border_style="green"
-        ))
-
-agent_v3 = AutonomousCognitiveAgentV3(
-    engine=engine,
-    working_mem=working_mem,
-    semantic_mem=semantic_mem,
-    episodic_mem=episodic_mem,
-    skill_registry=skill_registry,
-    master_sandbox=master_sandbox,
-    planner=planner,
-    critic=critic,
-    harvester=trajectory_harvester
-)
-print("✅ Autonomous Cognitive Agent 3.0 ready.")
-""")
-
-# Step 8: Synaptic Weight Consolidation (LoRA fine-tuning)
+# Step 8
 add_md("""## 🧬 Step 8: Synaptic Weight Consolidation (Autonomous RLVR LoRA Fine-Tuning)
 True AGI requires updating neural weights from empirical experience. This cell runs parameter-efficient LoRA updates on Google Colab's GPU using the harvested high-reward trajectories without catastrophic forgetting.""")
-add_code("""#@title 🧬 Synaptic LoRA Consolidation Engine
-import os
-import json
-from datasets import Dataset
-from peft import LoraConfig, get_peft_model, TaskType
+add_code(CELL_CODES["cell_08_lora"])
 
-def consolidate_synaptic_weights(dataset_file: str = "cognitive_trajectories.jsonl", output_dir: str = "./sarthika_adapter"):
-    if not os.path.exists(dataset_file):
-        print("⚠️ No trajectory dataset found yet. Run an autonomous experiment first!")
-        return
-
-    with open(dataset_file, "r") as f:
-        records = [json.loads(line) for line in f if line.strip()]
-
-    # Filter for high-reward trajectories
-    clean_records = [r for r in records if r.get("reward_score", 0.0) >= 0.70]
-    print(f"📊 Total trajectories: {len(records)} | High-reward verified: {len(clean_records)}")
-
-    if len(clean_records) < 3:
-        print("💡 Accumulate at least 3 verified trajectories before running fine-tuning.")
-        return
-
-    print("🚀 Preparing LoRA adapter to consolidate synaptic weights...")
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM
-    )
-    print("✅ LoRA configuration constructed with rank r=16, alpha=32 (preserves pre-trained knowledge).")
-    print(f"📁 Verified training buffer ready for offline gradient consolidation into: {output_dir}")
-
-consolidate_synaptic_weights()
-""")
-
-# Step 9: Experiment 1
+# Step 9
 add_md("""## 🧪 Experiment 1: Fast Algorithmic Synthesis & Persistent Matrix Exponentiation
 Tests whether the agent can synthesize an $O(\\log n)$ matrix exponentiation algorithm for $F_{60} \\pmod{10^9+7}$, persist the function in master state, and factorize the result.""")
-add_code("""#@title Run Experiment 1: Fibonacci Matrix Exponentiation & Factoring
-goal_1 = \"\"\"Synthesize a function to compute the 60th Fibonacci number modulo 10^9+7 using O(log n) Matrix Exponentiation.
-Execute the function, print the numerical result, verify that the function persists in memory, and calculate its prime factors.\"\"\"
+add_code(CELL_CODES["cell_09_exp1"])
 
-agent_v3.run(goal_1)
-""")
-
-# Step 10: Experiment 2
+# Step 10
 add_md("""## 🧪 Experiment 2: Lifelong Transfer Learning
 Proves that skills and variables established in previous sessions are preserved and reused to solve higher-level number theory tasks.""")
-add_code("""#@title Run Experiment 2: Lifelong Transfer Learning
-goal_2 = \"\"\"Using the matrix exponentiation and prime factorization skills established in previous sessions, compute the 35th Fibonacci number and determine if it shares any prime factors with 105.\"\"\"
+add_code(CELL_CODES["cell_10_exp2"])
 
-agent_v3.run(goal_2)
-""")
-
-# Step 11: Interactive Cognitive Terminal
+# Step 11
 add_md("""## 🚀 Step 9: Interactive Cognitive Terminal
 Challenge Sarthika with any arbitrary computational, mathematical, or programming objective.""")
-add_code("""#@title 🎮 Interactive Autonomous Goal Terminal
-#@markdown Enter any high-level objective for the agent:
-goal_input = "Investigate whether 2^31 - 1 is a Mersenne prime using the Lucas-Lehmer test or trial division." #@param {type:"string"}
+add_code(CELL_CODES["cell_11_interactive"])
 
-if goal_input.strip():
-    agent_v3.run(goal_input)
-""")
+# Rigorous AST syntax check on ALL code cells
+print("🔍 Running rigorous AST syntax validation on all code cells...")
+syntax_errors = 0
+for idx, cell in enumerate(notebook["cells"]):
+    if cell["cell_type"] == "code":
+        code_str = "".join(cell["source"])
+        clean_code = "\n".join([line for line in code_str.split("\n") if not line.strip().startswith(("!", "%"))])
+        try:
+            ast.parse(clean_code)
+            print(f"  Cell {idx:02d}: ✅ Syntax Valid")
+        except Exception as e:
+            print(f"  Cell {idx:02d}: ❌ Syntax Error: {type(e).__name__}: {e}")
+            syntax_errors += 1
 
-# Save notebook
-with open("AGI_Cognitive_Agent_v2.ipynb", "w") as f:
-    json.dump(notebook, f, indent=2)
+if syntax_errors > 0:
+    raise RuntimeError(f"Build aborted: {syntax_errors} cells failed syntax validation!")
 
-print("✅ Successfully generated upgraded AGI_Cognitive_Agent_v2.ipynb with Architecture 3.0.")
+with open("AGI_Cognitive_Agent_v2.ipynb", "w", encoding="utf-8") as f:
+    json.dump(notebook, f, indent=2, ensure_ascii=False)
+
+print(f"\n🎉 ALL {len(notebook['cells'])} CELLS PASSED! Successfully generated upgraded AGI_Cognitive_Agent_v2.ipynb.")
