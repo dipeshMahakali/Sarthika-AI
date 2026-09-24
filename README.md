@@ -1,10 +1,12 @@
 # 🧠 Sarthika Autonomous Cognitive Architecture 3.0 (Level-2 Micro-AGI Engine)
 ## Dual-Process Reasoning, Test-Time Tree Search with Reflexion, and Synaptic Self-Evolution
 
-This workspace contains the state-of-the-art implementation of the Sarthika Cognitive Agent:
-📁 **[`AGI_Cognitive_Agent_v2.ipynb`](./AGI_Cognitive_Agent_v2.ipynb)**
+This workspace contains the state-of-the-art implementations of the Sarthika Cognitive Agent:
+* 🌟 **Level 3 (Expert AGI):** 📁 **[`AGI_Cognitive_Agent_v3.ipynb`](./AGI_Cognitive_Agent_v3.ipynb)** — MCTS Tree Search, Causal World Model, Skill Graph DAG, and Level 3 Empirical Evaluation Suite.
+* 📦 **Level 2 (Competent AGI):** 📁 **[`AGI_Cognitive_Agent_v2.ipynb`](./AGI_Cognitive_Agent_v2.ipynb)** — Transactional Sandboxing, Reflexion Backtracking, and Tripartite Memory.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dipeshMahakali/Sarthika-AI/blob/main/AGI_Cognitive_Agent_v2.ipynb)
+[![Open In Colab (v3)](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dipeshMahakali/Sarthika-AI/blob/main/AGI_Cognitive_Agent_v3.ipynb)
+
 
 ---
 
