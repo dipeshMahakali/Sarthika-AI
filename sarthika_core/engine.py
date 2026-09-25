@@ -61,6 +61,9 @@ class GroqEngine(BaseCognitiveEngine):
         if not self.api_key:
             raise ValueError("GROQ_API_KEY is not configured. Please supply an API key or use MockEngine.")
 
+        import time
+        import re
+
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -83,20 +86,33 @@ class GroqEngine(BaseCognitiveEngine):
             }
         )
 
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"]
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            if "model_not_found" in err_body:
-                raise RuntimeError(
-                    f"Groq Model '{self.model}' not found on your account. "
-                    "Please select 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile', or 'mixtral-8x7b-32768'."
-                )
-            raise RuntimeError(f"Groq API Error {e.code}: {err_body}")
-        except Exception as e:
-            raise RuntimeError(f"Inference Connection Error: {str(e)}")
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            try:
+                with urllib.request.urlopen(req, timeout=35) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                    return result["choices"][0]["message"]["content"]
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="replace")
+                if e.code == 429 and attempt < max_attempts - 1:
+                    wait_sec = 6.0 * (attempt + 1)
+                    match = re.search(r"try again in ([\d\.]+)s", err_body, re.IGNORECASE)
+                    if match:
+                        wait_sec = float(match.group(1)) + 1.0
+                    time.sleep(wait_sec)
+                    continue
+
+                if "model_not_found" in err_body:
+                    raise RuntimeError(
+                        f"Groq Model '{self.model}' not found on your account. "
+                        "Please select 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile', or 'mixtral-8x7b-32768'."
+                    )
+                raise RuntimeError(f"Groq API Error {e.code}: {err_body}")
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    time.sleep(2.0)
+                    continue
+                raise RuntimeError(f"Inference Connection Error: {str(e)}")
 
 
 class OpenAIEngine(BaseCognitiveEngine):

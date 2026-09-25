@@ -23,7 +23,8 @@ class MetacognitivePlanner:
         )
         response = self.engine.generate(
             prompt=prompt,
-            system_prompt="You are a System 2 Metacognitive Task Planner. Produce lean, execution-oriented sub-plans."
+            system_prompt="You are a System 2 Metacognitive Task Planner. Produce lean, execution-oriented sub-plans.",
+            max_new_tokens=256
         )
         tasks = []
         for line in response.strip().split("\n"):
@@ -59,7 +60,8 @@ class MetacognitivePlanner:
         raw_response = self.engine.generate(
             prompt=prompt,
             system_prompt="You are an advanced System 1 algorithmic synthesizer. Propose distinct, competitive, runnable Python solutions.",
-            temperature=temperature
+            temperature=temperature,
+            max_new_tokens=750
         )
 
         return self._extract_candidates_robust(raw_response, subtask)
@@ -132,7 +134,8 @@ class System2Critic:
         response = self.engine.generate(
             prompt=prompt,
             system_prompt="You are an uncompromising System 2 Code Verifier. Reward genuine mathematical calculation and penalize placeholders.",
-            temperature=0.1
+            temperature=0.1,
+            max_new_tokens=128
         )
 
         score = 0.50
