@@ -217,7 +217,7 @@ def build_app():
                         )
                         model_box = gr.Textbox(
                             label="Model Identifier",
-                            value="llama-3.3-70b-versatile"
+                            value="llama-3.1-8b-instant"
                         )
                     with gr.Row():
                         tau_slider = gr.Slider(

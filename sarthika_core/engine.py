@@ -27,10 +27,35 @@ class GroqEngine(BaseCognitiveEngine):
     Zero-dependency implementation using standard library urllib, with optional groq SDK fallback.
     Free tier: 30 RPM, 14,400 requests/day, ~300-500 tokens/sec.
     """
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.1-8b-instant"):
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
-        self.model = model
+        self.model = model or "llama-3.1-8b-instant"
         self.endpoint = "https://api.groq.com/openai/v1/chat/completions"
+
+    @staticmethod
+    def get_available_models(api_key: str) -> List[str]:
+        """Fetches live available models from Groq API."""
+        default_models = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-specdec",
+            "llama-3.1-70b-versatile",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+            "deepseek-r1-distill-llama-70b"
+        ]
+        if not api_key:
+            return default_models
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [m["id"] for m in data.get("data", []) if m.get("active", True)]
+                return models if models else default_models
+        except Exception:
+            return default_models
 
     def generate(self, prompt: str, system_prompt: str = "", max_new_tokens: int = 1024, temperature: float = 0.6) -> str:
         if not self.api_key:
@@ -64,6 +89,11 @@ class GroqEngine(BaseCognitiveEngine):
                 return result["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
+            if "model_not_found" in err_body:
+                raise RuntimeError(
+                    f"Groq Model '{self.model}' not found on your account. "
+                    "Please select 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile', or 'mixtral-8x7b-32768'."
+                )
             raise RuntimeError(f"Groq API Error {e.code}: {err_body}")
         except Exception as e:
             raise RuntimeError(f"Inference Connection Error: {str(e)}")

@@ -77,10 +77,27 @@ with st.sidebar:
         help="Get a free key in 30 seconds with no credit card at console.groq.com/keys"
     )
 
-    model_name = st.text_input(
-        "Model Identifier",
-        value="llama-3.3-70b-versatile" if "Groq" in provider else "meta-llama/llama-3.3-70b-instruct:free"
-    )
+    if "Groq" in provider:
+        groq_models = GroqEngine.get_available_models(api_key.strip())
+        display_options = []
+        for m in groq_models:
+            if m == "llama-3.1-8b-instant":
+                display_options.append(f"{m} (Recommended - Fast & Free)")
+            else:
+                display_options.append(m)
+        display_options.append("Custom Model ID...")
+
+        chosen_opt = st.selectbox("Groq Model", options=display_options, index=0)
+        if "Custom" in chosen_opt:
+            model_name = st.text_input("Enter Exact Model ID", value="llama-3.1-8b-instant")
+        else:
+            model_name = chosen_opt.split(" ")[0]
+    else:
+        model_name = st.text_input(
+            "Model Identifier",
+            value="meta-llama/llama-3.3-70b-instruct:free",
+            help="For OpenRouter, use models like meta-llama/llama-3.3-70b-instruct:free or qwen/qwen-2.5-72b-instruct"
+        )
 
     tau_threshold = st.slider(
         "Epistemic Acceptance Gate (τ)",
@@ -168,76 +185,86 @@ with tab_terminal:
             code_container = st.container()
             status_container = st.empty()
 
-            with status_container.status("🧠 System 2 Deliberating: Decomposing goal...", expanded=True) as status_box:
-                stream = agent.run_stream(
-                    objective=goal_input.strip(),
-                    max_retries_per_step=int(max_retries),
-                    min_acceptance_score=float(tau_threshold)
+            try:
+                with status_container.status("🧠 System 2 Deliberating: Decomposing goal...", expanded=True) as status_box:
+                    stream = agent.run_stream(
+                        objective=goal_input.strip(),
+                        max_retries_per_step=int(max_retries),
+                        min_acceptance_score=float(tau_threshold)
+                    )
+
+                    for event in stream:
+                        etype = event.get("type")
+
+                        if etype == "decomposition":
+                            subtasks = event.get("subtasks", [])
+                            status_box.update(label=f"📋 Subtasks Planned: {len(subtasks)} steps", state="running")
+                            with subtasks_container:
+                                st.markdown("### 📋 Causal Subtasks Planned")
+                                for idx, t in enumerate(subtasks, 1):
+                                    st.markdown(f"- ⏳ **Step {idx}:** {t}")
+
+                        elif etype == "step_start":
+                            s_idx = event["step_idx"]
+                            tot = event["total_steps"]
+                            subtask = event["subtask"]
+                            att = event["attempt"]
+                            status_box.update(
+                                label=f"🔄 Step {s_idx}/{tot}: {subtask} (Attempt {att})",
+                                state="running"
+                            )
+                            st.write(f"**Step {s_idx}: {subtask}** *(Attempt {att})* — Generating 3 algorithmic candidates...")
+
+                        elif etype == "phase_4_scorecard":
+                            scorecard = event["scorecard"]
+                            best_cand = event["best_candidate"]
+                            best_score = event["best_score"]
+                            
+                            with scorecard_container:
+                                st.markdown(f"#### 📊 Cognitive Scorecard — Step {event['step_idx']} (Attempt {event['attempt']})")
+                                table_data = []
+                                for r in scorecard:
+                                    table_data.append({
+                                        "Candidate": r["candidate"],
+                                        "Mental Sim": "✅ Safe" if r["mental_sim"] == "Safe" else "⚠️ Warning",
+                                        "Execution": "✅ Success" if r["executed"] == "Success" else "❌ Crash",
+                                        "Score": f"{r['score']:.2f}",
+                                        "UCT Value": f"{r['uct']:.2f}",
+                                        "Justification": r["justification"]
+                                    })
+                                st.dataframe(table_data, use_container_width=True)
+
+                        elif etype == "accepted":
+                            status_box.write(f"🏆 **ACCEPTED:** {event['candidate']} (Score: `{event['score']:.2f}`) committed to master sandbox.")
+                            with code_container:
+                                st.markdown(f"### 💻 Verified Solution Code (Step {event['step_idx']})")
+                                st.code(event["code"], language="python")
+                                if event.get("stdout"):
+                                    st.markdown("**Execution Output:**")
+                                    st.code(event["stdout"])
+
+                        elif etype == "reflexion":
+                            status_box.write(f"⚠️ **REJECTED (Score < {tau_threshold}):** Increasing temperature and triggering Reflexion...")
+                            st.warning(f"Reflexion Critique: {event['feedback']}")
+
+                        elif etype == "complete":
+                            status_box.update(label="🎉 Cognitive Run Complete & Formally Verified!", state="complete", expanded=False)
+                            st.success(
+                                f"🏁 Execution finished. Sandbox Symbols: {event['active_symbols_count']} | "
+                                f"Skills in DAG: {event['skills_count']} | Harvested Trajectories: {event['trajectories_count']}"
+                            )
+                            with st.expander("📦 View Dynamic Procedural Skill Catalog", expanded=False):
+                                for s in event["skills_catalog"]:
+                                    st.markdown(f"- **`{s['name']}`**: {s['docstring']}")
+            except Exception as e:
+                status_container.empty()
+                st.error(f"❌ **Execution Error:** {str(e)}")
+                st.info(
+                    "💡 **How to fix this:**\n\n"
+                    "1. Open the sidebar on the left (arrow **`>`** in top-left).\n"
+                    "2. Under **Groq Model**, select **`llama-3.1-8b-instant`** (this model is always active and free on all accounts).\n"
+                    "3. Click **Execute Autonomous Cognitive Loop** again."
                 )
-
-                for event in stream:
-                    etype = event.get("type")
-
-                    if etype == "decomposition":
-                        subtasks = event.get("subtasks", [])
-                        status_box.update(label=f"📋 Subtasks Planned: {len(subtasks)} steps", state="running")
-                        with subtasks_container:
-                            st.markdown("### 📋 Causal Subtasks Planned")
-                            for idx, t in enumerate(subtasks, 1):
-                                st.markdown(f"- ⏳ **Step {idx}:** {t}")
-
-                    elif etype == "step_start":
-                        s_idx = event["step_idx"]
-                        tot = event["total_steps"]
-                        subtask = event["subtask"]
-                        att = event["attempt"]
-                        status_box.update(
-                            label=f"🔄 Step {s_idx}/{tot}: {subtask} (Attempt {att})",
-                            state="running"
-                        )
-                        st.write(f"**Step {s_idx}: {subtask}** *(Attempt {att})* — Generating 3 algorithmic candidates...")
-
-                    elif etype == "phase_4_scorecard":
-                        scorecard = event["scorecard"]
-                        best_cand = event["best_candidate"]
-                        best_score = event["best_score"]
-                        
-                        with scorecard_container:
-                            st.markdown(f"#### 📊 Cognitive Scorecard — Step {event['step_idx']} (Attempt {event['attempt']})")
-                            table_data = []
-                            for r in scorecard:
-                                table_data.append({
-                                    "Candidate": r["candidate"],
-                                    "Mental Sim": "✅ Safe" if r["mental_sim"] == "Safe" else "⚠️ Warning",
-                                    "Execution": "✅ Success" if r["executed"] == "Success" else "❌ Crash",
-                                    "Score": f"{r['score']:.2f}",
-                                    "UCT Value": f"{r['uct']:.2f}",
-                                    "Justification": r["justification"]
-                                })
-                            st.dataframe(table_data, use_container_width=True)
-
-                    elif etype == "accepted":
-                        status_box.write(f"🏆 **ACCEPTED:** {event['candidate']} (Score: `{event['score']:.2f}`) committed to master sandbox.")
-                        with code_container:
-                            st.markdown(f"### 💻 Verified Solution Code (Step {event['step_idx']})")
-                            st.code(event["code"], language="python")
-                            if event.get("stdout"):
-                                st.markdown("**Execution Output:**")
-                                st.code(event["stdout"])
-
-                    elif etype == "reflexion":
-                        status_box.write(f"⚠️ **REJECTED (Score < {tau_threshold}):** Increasing temperature and triggering Reflexion...")
-                        st.warning(f"Reflexion Critique: {event['feedback']}")
-
-                    elif etype == "complete":
-                        status_box.update(label="🎉 Cognitive Run Complete & Formally Verified!", state="complete", expanded=False)
-                        st.success(
-                            f"🏁 Execution finished. Sandbox Symbols: {event['active_symbols_count']} | "
-                            f"Skills in DAG: {event['skills_count']} | Harvested Trajectories: {event['trajectories_count']}"
-                        )
-                        with st.expander("📦 View Dynamic Procedural Skill Catalog", expanded=False):
-                            for s in event["skills_catalog"]:
-                                st.markdown(f"- **`{s['name']}`**: {s['docstring']}")
 
 
 # TAB 2: BENCHMARK SUITE
