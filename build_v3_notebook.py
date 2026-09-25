@@ -120,13 +120,19 @@ class CognitiveEngine:
             add_generation_prompt=True
         )
 
-        model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+        gen_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        if temperature > 0:
+            gen_kwargs["do_sample"] = True
+            gen_kwargs["temperature"] = temperature
+        else:
+            gen_kwargs["do_sample"] = False
+
         generated_ids = self.model.generate(
             **model_inputs,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=True if temperature > 0 else False,
-            pad_token_id=self.tokenizer.eos_token_id
+            **gen_kwargs
         )
 
         generated_ids = [
@@ -530,9 +536,14 @@ class CausalWorldModel:
                 if isinstance(node.func, ast.Name):
                     if node.func.id in self.prohibited_modules:
                         unsafe_calls.append(node.func.id)
-                    # Check for naive pickle usage on functions
-                    if node.func.id == "pickle" or (isinstance(node.func, ast.Attribute) and node.func.attr == "dump"):
+                    if node.func.id == "pickle":
                         has_pickle_risk = True
+                elif isinstance(node.func, ast.Attribute):
+                    if isinstance(node.func.value, ast.Name):
+                        if node.func.value.id in self.prohibited_modules:
+                            unsafe_calls.append(node.func.value.id)
+                        if node.func.value.id == "pickle":
+                            has_pickle_risk = True
 
         # Preemptive fault check: Pickling dynamic closures
         if "pickle" in imported_modules or has_pickle_risk:
@@ -598,7 +609,8 @@ class MCTSNode:
         if self.visits == 0:
             return float("inf")
         exploitation = self.q_value
-        exploration = exploration_constant * math.sqrt(math.log(self.parent.visits) / self.visits) if self.parent else 0.0
+        parent_visits = max(1, self.parent.visits) if self.parent else 1
+        exploration = exploration_constant * math.sqrt(math.log(parent_visits) / self.visits)
         return exploitation + exploration
 
     def add_child(self, child_node: "MCTSNode") -> "MCTSNode":
@@ -877,6 +889,7 @@ class AutonomousCognitiveAgentV3_Expert:
 
         # Root MCTS Node
         root_mcts = MCTSNode(state_description="Root State: Initialized master sandbox")
+        current_tree_node = root_mcts
 
         # 3. Deliberative Execution Loop
         for step_idx, subtask_obj in enumerate(self.working_mem.subtasks, 1):
@@ -957,12 +970,13 @@ class AutonomousCognitiveAgentV3_Expert:
                     node = MCTSNode(
                         state_description=f"Step {step_idx} - {name}",
                         code_action=branch["code"],
-                        parent=root_mcts,
+                        parent=current_tree_node,
                         depth=step_idx
                     )
                     node.terminal_score = score
                     node.execution_result = branch["exec_result"]
-                    root_mcts.add_child(node)
+                    current_tree_node.add_child(node)
+                    branch["node"] = node
                     self.mcts.backpropagate(node, score)
 
                     eval_table.add_row(
@@ -1028,6 +1042,7 @@ class AutonomousCognitiveAgentV3_Expert:
 
                     step_verified = True
                     subtask_obj["done"] = True
+                    current_tree_node = winning_branch["node"]
                 else:
                     # Dynamic Reflexion 2.0 with Adaptive Temperature Tuning
                     temperature = min(1.0, temperature + 0.15)
@@ -1094,9 +1109,9 @@ def run_level3_expert_agi_benchmark():
     # TEST 2: Autonomous Tool Composition (Skill DAG Chaining)
     # ---------------------------------------------------------
     print("\\n[TEST 2] Autonomous Tool Composition: Higher-Order Pipeline Synthesis")
-    # Compose prime_factors -> gcd pipeline
-    composite_code = skill_graph.compose_pipeline("prime_gcd_meta_tool", ["prime_factors"])
-    t2_pass = composite_code is not None and "prime_gcd_meta_tool" in skill_graph.skills
+    # Compose mod_pow -> prime_factors pipeline
+    composite_code = skill_graph.compose_pipeline("mod_factor_pipeline", ["mod_pow", "prime_factors"])
+    t2_pass = composite_code is not None and "mod_factor_pipeline" in skill_graph.skills
     results.append(("Skill Graph Composition", "Passed" if t2_pass else "Failed", "Autonomously synthesized composite tool pipeline in DAG."))
 
     # ---------------------------------------------------------
